@@ -17,13 +17,16 @@ package raft
 //   in the same server.
 //
 
-import "sync"
-import "sync/atomic"
-import "../labrpc"
+import (
+	"math/rand"
+	//	"bytes"
+	"sync"
+	"sync/atomic"
+	"time"
 
-// import "bytes"
-// import "../labgob"
-
+	//	"6.824/labgob"
+	"6.824/labrpc"
+)
 
 
 //
@@ -33,14 +36,20 @@ import "../labrpc"
 // CommandValid to true to indicate that the ApplyMsg contains a newly
 // committed log entry.
 //
-// in Lab 3 you'll want to send other kinds of messages (e.g.,
-// snapshots) on the applyCh; at that point you can add fields to
-// ApplyMsg, but set CommandValid to false for these other uses.
+// in part 2D you'll want to send other kinds of messages (e.g.,
+// snapshots) on the applyCh, but set CommandValid to false for these
+// other uses.
 //
 type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+
+	// For 2D:
+	SnapshotValid bool
+	Snapshot      []byte
+	SnapshotTerm  int
+	SnapshotIndex int
 }
 
 //
@@ -57,16 +66,25 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// 2A CODE
+	role string
+	latestHeartBeatTime int64
+	term int
+	termTicket map[int]bool
+	termVoteNums int
+	//termStarTime float64
+	//termEndTime float64
 }
 
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
-	var term int
 	var isleader bool
 	// Your code here (2A).
-	return term, isleader
+	if rf.role == "leader"{
+		isleader = true
+	}
+	return rf.term, isleader
 }
 
 //
@@ -109,6 +127,25 @@ func (rf *Raft) readPersist(data []byte) {
 }
 
 
+//
+// A service wants to switch to snapshot.  Only do so if Raft hasn't
+// have more recent info since it communicate the snapshot on applyCh.
+//
+func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
+
+	// Your code here (2D).
+
+	return true
+}
+
+// the service says it has created a snapshot that has
+// all info up to and including index. this means the
+// service no longer needs the log through (and including)
+// that index. Raft should now trim its log as much as possible.
+func (rf *Raft) Snapshot(index int, snapshot []byte) {
+	// Your code here (2D).
+
+}
 
 
 //
@@ -117,6 +154,8 @@ func (rf *Raft) readPersist(data []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	// 2A code
+	Term int
 }
 
 //
@@ -125,6 +164,28 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	// 2A CODE
+	Option bool
+}
+
+
+type HeartBeatArgs struct {
+	Term int
+}
+
+type HeartBeatReply struct {
+}
+
+func (rf *Raft) HeartBeat(args *HeartBeatArgs, reply *HeartBeatReply){
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if args.Term >= rf.term{
+		rf.term = args.Term
+		if rf.role != "follower"{  // 此时接收到的RPC任期如果大于等于自己的，就说明发送者已经当选leader。
+			rf.role = "follower"
+		}
+		rf.latestHeartBeatTime = time.Now().UnixNano()
+	}
 }
 
 //
@@ -132,57 +193,45 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	// 2A CODE
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.term > args.Term{
+		return
+	}
+	if !rf.termTicket[args.Term]{
+		reply.Option = true
+		rf.termTicket[args.Term] = true
+	}
 }
 
-//
-// example code to send a RequestVote RPC to a server.
-// server is the index of the target server in rf.peers[].
-// expects RPC arguments in args.
-// fills in *reply with RPC reply, so caller should
-// pass &reply.
-// the types of the args and reply passed to Call() must be
-// the same as the types of the arguments declared in the
-// handler function (including whether they are pointers).
-//
-// The labrpc package simulates a lossy network, in which servers
-// may be unreachable, and in which requests and replies may be lost.
-// Call() sends a request and waits for a reply. If a reply arrives
-// within a timeout interval, Call() returns true; otherwise
-// Call() returns false. Thus Call() may not return for a while.
-// A false return can be caused by a dead server, a live server that
-// can't be reached, a lost request, or a lost reply.
-//
-// Call() is guaranteed to return (perhaps after a delay) *except* if the
-// handler function on the server side does not return.  Thus there
-// is no need to implement your own timeouts around Call().
-//
-// look at the comments in ../labrpc/labrpc.go for more details.
-//
-// if you're having trouble getting RPC to work, check that you've
-// capitalized all field names in structs passed over RPC, and
-// that the caller passes the address of the reply struct with &, not
-// the struct itself.
-//
+
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
 }
 
+func (rf *Raft) sendHeartBeat(){
+	for {
+		rf.mu.Lock()
+		if rf.role == "leader" {
+			for i,_ := range rf.peers{
+				go func(n int) {
+					args := &HeartBeatArgs{Term: rf.term}
+					reply := &HeartBeatReply{}
+					if n != rf.me{
+						rf.peers[n].Call("Raft.HeartBeat", args, reply)
+					}
+				}(i)
+			}
+		}
+		time.Sleep(100*time.Millisecond)
+		rf.mu.Unlock()
+	}
+}
 
-//
-// the service using Raft (e.g. a k/v server) wants to start
-// agreement on the next command to be appended to Raft's log. if this
-// server isn't the leader, returns false. otherwise start the
-// agreement and return immediately. there is no guarantee that this
-// command will ever be committed to the Raft log, since the leader
-// may fail or lose an election. even if the Raft instance has been killed,
-// this function should return gracefully.
-//
-// the first return value is the index that the command will appear at
-// if it's ever committed. the second return value is the current
-// term. the third return value is true if this server believes it is
-// the leader.
-//
+
+
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
@@ -194,17 +243,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	return index, term, isLeader
 }
 
-//
-// the tester doesn't halt goroutines created by Raft after each test,
-// but it does call the Kill() method. your code can use killed() to
-// check whether Kill() has been called. the use of atomic avoids the
-// need for a lock.
-//
-// the issue is that long-running goroutines use memory and may chew
-// up CPU time, perhaps causing later tests to fail and generating
-// confusing debug output. any goroutine with a long-running loop
-// should call killed() to check whether it should stop.
-//
+
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
@@ -213,6 +252,81 @@ func (rf *Raft) Kill() {
 func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
+}
+
+
+func (rf *Raft) startElection(){
+	rf.mu.Lock()
+	rf.term ++
+	rf.role = "candidate"
+	rf.termVoteNums = 0
+	if !rf.termTicket[rf.term]{
+		rf.termTicket[rf.term] = true
+		rf.termVoteNums ++
+	}
+	rf.mu.Unlock()
+	for i,_ := range rf.peers{
+		if i != rf.me{
+			go func(n int) {
+				args := &RequestVoteArgs{Term: rf.term}
+				resp := &RequestVoteReply{}
+				if ok:= rf.sendRequestVote(n, args, resp);ok{
+					if resp.Option{
+						rf.mu.Lock()
+						rf.termVoteNums ++
+						rf.mu.Unlock()
+					}
+				}
+			}(i)
+		}
+	}
+	go func() {
+		rand.Seed(time.Now().UnixNano())
+		n := rand.Intn(500)
+		time.Sleep(time.Millisecond*time.Duration(n + 500))
+		rf.mu.Lock()
+		if rf.role != "leader"{
+			rf.role = "follower"
+		}
+		rf.mu.Unlock()
+	}()
+
+	for {
+		rf.mu.Lock()
+		if rf.role == "candidate"{
+			if rf.termVoteNums * 2 > len(rf.peers){
+				rf.role = "leader"
+				rf.mu.Unlock()
+				break
+			}
+		}else{
+			rf.mu.Unlock()
+			break
+		}
+		rf.mu.Unlock()
+		time.Sleep(1*time.Millisecond)
+	}
+}
+
+
+// The ticker go routine starts a new election if this peer hasn't received
+// heartsbeats recently.
+func (rf *Raft) ticker() {
+	for rf.killed() == false {
+
+		// Your code here to check if a leader election should
+		// be started and to randomize sleeping time using
+		// time.Sleep().
+		// 2A CODE
+		rf.mu.Lock()
+		if (time.Now().UnixNano() - rf.latestHeartBeatTime) / (1000*1000) > 1000 && rf.role == "follower"{
+			rf.mu.Unlock()
+			rf.startElection()
+		}else{
+			rf.mu.Unlock()
+			time.Sleep(50*time.Millisecond)
+		}
+	}
 }
 
 //
@@ -232,12 +346,18 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-
+	rf.role = "follower"
+	rf.termTicket = make(map[int]bool, 0)
 	// Your initialization code here (2A, 2B, 2C).
+
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+	// start ticker goroutine to start elections
+	go rf.ticker()  // 选举检测
+
+	go rf.sendHeartBeat() // 心跳发送
 
 	return rf
 }
