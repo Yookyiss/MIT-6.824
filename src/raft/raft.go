@@ -229,8 +229,8 @@ func (rf *Raft) sendHeartBeat(){
 				}(i)
 			}
 		}
-		time.Sleep(100*time.Millisecond)
 		rf.mu.Unlock()
+		time.Sleep(100*time.Millisecond)
 	}
 }
 
@@ -330,7 +330,7 @@ func (rf *Raft) ticker() {
 			rf.startElection()
 		}else{
 			rf.mu.Unlock()
-			time.Sleep(50*time.Millisecond)
+			time.Sleep(10*time.Millisecond)
 		}
 	}
 }
