@@ -25,7 +25,7 @@ import (
 	"time"
 
 	//	"6.824/labgob"
-	"6.824/labrpc"
+	"../labrpc"
 )
 
 
@@ -81,6 +81,8 @@ type Raft struct {
 func (rf *Raft) GetState() (int, bool) {
 	var isleader bool
 	// Your code here (2A).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	if rf.role == "leader"{
 		isleader = true
 	}
@@ -217,7 +219,9 @@ func (rf *Raft) sendHeartBeat(){
 		if rf.role == "leader" {
 			for i,_ := range rf.peers{
 				go func(n int) {
+					rf.mu.Lock()
 					args := &HeartBeatArgs{Term: rf.term}
+					rf.mu.Unlock()
 					reply := &HeartBeatReply{}
 					if n != rf.me{
 						rf.peers[n].Call("Raft.HeartBeat", args, reply)
@@ -268,7 +272,9 @@ func (rf *Raft) startElection(){
 	for i,_ := range rf.peers{
 		if i != rf.me{
 			go func(n int) {
+				rf.mu.Lock()
 				args := &RequestVoteArgs{Term: rf.term}
+				rf.mu.Unlock()
 				resp := &RequestVoteReply{}
 				if ok:= rf.sendRequestVote(n, args, resp);ok{
 					if resp.Option{
